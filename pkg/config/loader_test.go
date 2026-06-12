@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -34,7 +36,7 @@ func TestLoadConfig_ExplicitFlag(t *testing.T) {
 		},
 	}
 
-	result, err := LoadConfig("filebrowser-cli", []string{"--config", "/tmp/config.yaml"}, nil, "/fake/binary", fs)
+	result, err := LoadConfig("memos-cli", []string{"--config", "/tmp/config.yaml"}, nil, "/fake/binary", fs)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -57,7 +59,7 @@ func TestLoadConfig_ExplicitFlagEquals(t *testing.T) {
 		},
 	}
 
-	result, err := LoadConfig("filebrowser-cli", []string{"--config=/tmp/config.yaml"}, nil, "/fake/binary", fs)
+	result, err := LoadConfig("memos-cli", []string{"--config=/tmp/config.yaml"}, nil, "/fake/binary", fs)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -73,10 +75,10 @@ func TestLoadConfig_EnvVar(t *testing.T) {
 	os.WriteFile(configPath, configContent, 0644)
 
 	env := map[string]string{
-		"FILEBROWSER_CLI_CONFIG": configPath,
+		"MEMOS_CLI_CONFIG": configPath,
 	}
 
-	result, err := LoadConfig("filebrowser-cli", nil, env, "/fake/binary", nil)
+	result, err := LoadConfig("memos-cli", nil, env, "/fake/binary", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -94,7 +96,7 @@ func TestLoadConfig_ProjectLocal(t *testing.T) {
 	os.WriteFile(configPath, configContent, 0644)
 
 	// Use a path that won't match any user bin paths
-	binaryPath := filepath.Join(binDir, "filebrowser-cli")
+	binaryPath := filepath.Join(binDir, "memos-cli")
 
 	// Ensure we're in project mode by using a non-standard path
 	origGOPATH := os.Getenv("GOPATH")
@@ -117,7 +119,7 @@ func TestLoadConfig_ProjectLocal(t *testing.T) {
 	t.Logf("binaryPath: %s", binaryPath)
 	t.Logf("configPath: %s", configPath)
 
-	result, err := LoadConfig("filebrowser-cli", nil, nil, binaryPath, nil)
+	result, err := LoadConfig("memos-cli", nil, nil, binaryPath, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -146,7 +148,7 @@ func TestLoadConfig_ProjectLocalParent(t *testing.T) {
 	os.Setenv("GOPATH", "/nonexistent")
 	defer os.Setenv("GOPATH", origGOPATH)
 
-	result, err := LoadConfig("filebrowser-cli", nil, nil, filepath.Join(binDir, "filebrowser-cli"), nil)
+	result, err := LoadConfig("memos-cli", nil, nil, filepath.Join(binDir, "memos-cli"), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -162,7 +164,7 @@ func TestLoadConfig_NotFound(t *testing.T) {
 	os.Setenv("GOPATH", "/nonexistent")
 	defer os.Setenv("GOPATH", origGOPATH)
 
-	_, err := LoadConfig("filebrowser-cli", nil, nil, "/nonexistent/binary", fs)
+	_, err := LoadConfig("memos-cli", nil, nil, "/nonexistent/binary", fs)
 	if err == nil {
 		t.Error("expected error when no config found")
 	}
@@ -176,7 +178,7 @@ func TestLoadConfig_VersionMismatch(t *testing.T) {
 		},
 	}
 
-	_, err := LoadConfig("filebrowser-cli", []string{"--config", "/tmp/config.yaml"}, nil, "/fake/binary", fs)
+	_, err := LoadConfig("memos-cli", []string{"--config", "/tmp/config.yaml"}, nil, "/fake/binary", fs)
 	if err == nil {
 		t.Error("expected error for version mismatch")
 	}
@@ -191,7 +193,7 @@ func TestLoadConfig_DefaultVersion(t *testing.T) {
 		},
 	}
 
-	result, err := LoadConfig("filebrowser-cli", []string{"--config", "/tmp/config.yaml"}, nil, "/fake/binary", fs)
+	result, err := LoadConfig("memos-cli", []string{"--config", "/tmp/config.yaml"}, nil, "/fake/binary", fs)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -201,7 +203,7 @@ func TestLoadConfig_DefaultVersion(t *testing.T) {
 }
 
 func TestLoadConfig_EnvInterpolation(t *testing.T) {
-	configContent := []byte("version: 1\npassword: ${TEST_PASSWORD}\n")
+	configContent := []byte("version: 1\naccess_token: ${TEST_TOKEN}\n")
 	fs := &mockFS{
 		files: map[string][]byte{
 			"/tmp/config.yaml": configContent,
@@ -209,10 +211,10 @@ func TestLoadConfig_EnvInterpolation(t *testing.T) {
 	}
 
 	// Set env var
-	os.Setenv("TEST_PASSWORD", "secret123")
-	defer os.Unsetenv("TEST_PASSWORD")
+	os.Setenv("TEST_TOKEN", "secret123")
+	defer os.Unsetenv("TEST_TOKEN")
 
-	result, err := LoadConfig("filebrowser-cli", []string{"--config", "/tmp/config.yaml"}, nil, "/fake/binary", fs)
+	result, err := LoadConfig("memos-cli", []string{"--config", "/tmp/config.yaml"}, nil, "/fake/binary", fs)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -222,6 +224,80 @@ func TestLoadConfig_EnvInterpolation(t *testing.T) {
 	if result.Config == nil {
 		t.Error("expected non-nil Config")
 	}
+	if !strings.Contains(string(result.Data), "access_token: secret123") {
+		t.Fatalf("expected interpolated config data, got %q", string(result.Data))
+	}
+}
+
+func TestLoadConfig_GlobalWindowsAppDataRoaming(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-specific APPDATA discovery test")
+	}
+
+	configContent := []byte("version: 1\n")
+	tmpDir := t.TempDir()
+	gopath := filepath.Join(tmpDir, "go")
+	binDir := filepath.Join(gopath, "bin")
+	appData := filepath.Join(tmpDir, "AppData", "Roaming")
+	configPath := filepath.Join(appData, "memos-cli", "config.yaml")
+
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, configContent, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("GOPATH", gopath)
+	t.Setenv("APPDATA", appData)
+
+	result, err := LoadConfig("memos-cli", nil, nil, filepath.Join(binDir, "memos-cli.exe"), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SourcePath != configPath {
+		t.Fatalf("expected SourcePath %q, got %q", configPath, result.SourcePath)
+	}
+	if result.Mode != ModeGlobal {
+		t.Fatalf("expected Mode %q, got %q", ModeGlobal, result.Mode)
+	}
+}
+
+func TestLoadConfig_DoesNotReadFilebrowserUserConfig(t *testing.T) {
+	configContent := []byte("version: 1\n")
+	tmpDir := t.TempDir()
+	gopath := filepath.Join(tmpDir, "go")
+	binDir := filepath.Join(gopath, "bin")
+	configRoot := filepath.Join(tmpDir, "config")
+	filebrowserConfigPath := filepath.Join(configRoot, "filebrowser-cli", "config.yaml")
+
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(filebrowserConfigPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filebrowserConfigPath, configContent, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("GOPATH", gopath)
+	if runtime.GOOS == "windows" {
+		t.Setenv("APPDATA", configRoot)
+	} else {
+		t.Setenv("XDG_CONFIG_HOME", configRoot)
+	}
+
+	_, err := LoadConfig("memos-cli", nil, nil, filepath.Join(binDir, "memos-cli"), nil)
+	if err == nil {
+		t.Fatal("expected error when only filebrowser-cli config exists")
+	}
+	if strings.Contains(err.Error(), "filebrowser-cli") {
+		t.Fatalf("memos-cli loader should not try filebrowser-cli paths: %v", err)
+	}
 }
 
 func TestLoadConfig_NeverReadsSkillconfigJson(t *testing.T) {
@@ -230,7 +306,7 @@ func TestLoadConfig_NeverReadsSkillconfigJson(t *testing.T) {
 	// This test just ensures the loader works without it
 	fs := &mockFS{files: map[string][]byte{}}
 
-	_, err := LoadConfig("filebrowser-cli", nil, nil, "/fake/binary", fs)
+	_, err := LoadConfig("memos-cli", nil, nil, "/fake/binary", fs)
 	if err == nil {
 		t.Error("expected error when no config found")
 	}

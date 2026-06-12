@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -18,8 +19,8 @@ func TestResolve_GlobalMode_GOPATH(t *testing.T) {
 	os.Setenv("GOPATH", filepath.Join(tmpDir, "go"))
 	defer os.Setenv("GOPATH", origGOPATH)
 
-	binaryPath := filepath.Join(gopathBin, "filebrowser-cli")
-	mode, candidates := Resolve(binaryPath)
+	binaryPath := filepath.Join(gopathBin, "memos-cli")
+	mode, candidates := Resolve("memos-cli", binaryPath)
 
 	if mode != ModeGlobal {
 		t.Errorf("expected mode %q, got %q", ModeGlobal, mode)
@@ -49,8 +50,8 @@ func TestResolve_GlobalMode_HomeBin(t *testing.T) {
 		}
 	}()
 
-	binaryPath := filepath.Join(homeBin, "filebrowser-cli")
-	mode, _ := Resolve(binaryPath)
+	binaryPath := filepath.Join(homeBin, "memos-cli")
+	mode, _ := Resolve("memos-cli", binaryPath)
 
 	// This should be global mode since ~/go/bin is a user bin path
 	if mode != ModeGlobal {
@@ -69,8 +70,8 @@ func TestResolve_ProjectMode(t *testing.T) {
 	os.Setenv("GOPATH", "/nonexistent")
 	defer os.Setenv("GOPATH", origGOPATH)
 
-	binaryPath := filepath.Join(binDir, "filebrowser-cli")
-	mode, candidates := Resolve(binaryPath)
+	binaryPath := filepath.Join(binDir, "memos-cli")
+	mode, candidates := Resolve("memos-cli", binaryPath)
 
 	if mode != ModeProject {
 		t.Errorf("expected mode %q, got %q", ModeProject, mode)
@@ -116,5 +117,19 @@ func TestUserBinPaths(t *testing.T) {
 		if !filepath.IsAbs(p) {
 			t.Errorf("expected absolute path, got %q", p)
 		}
+	}
+}
+
+func TestResolve_UserConfigPath_IsScopedToCLI(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpHome, "xdg"))
+	t.Setenv("APPDATA", filepath.Join(tmpHome, "AppData", "Roaming"))
+
+	configPath := userConfigPath("memos-cli")
+	if !strings.Contains(configPath, string(filepath.Separator)+"memos-cli"+string(filepath.Separator)+"config.yaml") {
+		t.Fatalf("expected memos-cli config path, got %q", configPath)
+	}
+	if strings.Contains(configPath, "filebrowser-cli") {
+		t.Fatalf("memos-cli resolver must not include filebrowser-cli path: %q", configPath)
 	}
 }
